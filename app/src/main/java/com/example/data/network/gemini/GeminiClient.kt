@@ -22,131 +22,93 @@ class GeminiClient {
     private val listModelsAdapter = moshi.adapter(ListModelsResponse::class.java)
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(35, TimeUnit.SECONDS)
-        .writeTimeout(25, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
         .build()
 
     companion object {
-        private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-        private val FALLBACK_MODELS = listOf(
-            "gemini-2.5-flash",
-            "gemini-3.5-flash",
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-pro"
+        private val TEST_ENDPOINTS = listOf(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
         )
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         @Volatile
-        private var cachedActiveModel: String? = null
+        private var cachedWorkingEndpoint: String? = null
     }
 
-    private suspend fun resolveSupportedModel(apiKey: String): String = withContext(Dispatchers.IO) {
-        cachedActiveModel?.let { return@withContext it }
-
-        // Query available models from Google AI Studio
-        val listUrl = "$BASE_URL/models?key=$apiKey"
-        val request = Request.Builder().url(listUrl).get().build()
-
-        try {
-            okHttpClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val bodyString = response.body?.string() ?: ""
-                    val listResponse = listModelsAdapter.fromJson(bodyString)
-                    val available = listResponse?.models?.filter { model ->
-                        model.supportedGenerationMethods?.contains("generateContent") == true
-                    }?.map { it.name.removePrefix("models/") }
-
-                    if (!available.isNullOrEmpty()) {
-                        // Pick the best flash model or first supported model
-                        val chosen = available.firstOrNull { it.contains("2.5-flash") }
-                            ?: available.firstOrNull { it.contains("3.5-flash") }
-                            ?: available.firstOrNull { it.contains("flash") }
-                            ?: available.first()
-
-                        cachedActiveModel = chosen
-                        return@withContext chosen
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-
-        // Fallback default
-        FALLBACK_MODELS.first()
+    private fun cleanKey(key: String): String {
+        return key.trim().trim('"', '\'', ' ', '\n', '\r')
     }
 
     suspend fun testConnection(apiKey: String): Result<Boolean> = withContext(Dispatchers.IO) {
-        val trimmedKey = apiKey.trim()
+        val trimmedKey = cleanKey(apiKey)
         if (trimmedKey.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("API Key cannot be empty."))
         }
 
-        // 1. First test authentication and discover available models via listModels
-        val listUrl = "$BASE_URL/models?key=$trimmedKey"
-        val listRequest = Request.Builder().url(listUrl).get().build()
-
-        var discoveredModel: String? = null
-
+        // 1. Try to discover supported models via ListModels (non-fatal if restricted)
+        val discoveredEndpoints = mutableListOf<String>()
         try {
-            okHttpClient.newCall(listRequest).execute().use { response ->
-                val responseString = response.body?.string() ?: ""
+            val listUrl = "https://generativelanguage.googleapis.com/v1beta/models?key=$trimmedKey"
+            val listReq = Request.Builder()
+                .url(listUrl)
+                .header("x-goog-api-key", trimmedKey)
+                .get()
+                .build()
+
+            okHttpClient.newCall(listReq).execute().use { response ->
                 if (response.isSuccessful) {
-                    val listResponse = listModelsAdapter.fromJson(responseString)
+                    val bodyString = response.body?.string() ?: ""
+                    val listResponse = listModelsAdapter.fromJson(bodyString)
                     val supported = listResponse?.models?.filter {
                         it.supportedGenerationMethods?.contains("generateContent") == true
                     }?.map { it.name.removePrefix("models/") }
 
                     if (!supported.isNullOrEmpty()) {
-                        discoveredModel = supported.firstOrNull { it.contains("2.5-flash") }
-                            ?: supported.firstOrNull { it.contains("3.5-flash") }
-                            ?: supported.firstOrNull { it.contains("flash") }
-                            ?: supported.first()
-                        cachedActiveModel = discoveredModel
+                        // Prefer 2.0-flash, 2.5-flash, or any flash model
+                        val sorted = supported.sortedByDescending {
+                            when {
+                                it.contains("2.0-flash") -> 100
+                                it.contains("2.5-flash") -> 90
+                                it.contains("3.5-flash") -> 80
+                                it.contains("flash") -> 70
+                                else -> 10
+                            }
+                        }
+                        for (model in sorted) {
+                            discoveredEndpoints.add("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
+                        }
                     }
-                } else {
-                    val parsedError = try {
-                        listModelsAdapter.fromJson(responseString)?.error?.message
-                    } catch (_: Exception) {
-                        null
-                    }
-                    val errorMsg = when (response.code) {
-                        400 -> parsedError ?: "Invalid API key format. Please verify your key."
-                        403 -> parsedError ?: "API key is unauthorized or Gemini API is not enabled."
-                        429 -> "API quota exceeded. Please check Google AI Studio."
-                        else -> parsedError ?: "Connection failed with HTTP ${response.code}."
-                    }
-                    return@withContext Result.failure(IOException(errorMsg))
                 }
             }
-        } catch (e: Exception) {
-            // Network error during list
-            return@withContext Result.failure(IOException("Network error connecting to Gemini API: ${e.message}"))
-        }
+        } catch (_: Exception) {}
 
-        // 2. Perform minimal generateContent test
-        val modelToUse = discoveredModel ?: cachedActiveModel ?: FALLBACK_MODELS.first()
-        val candidateList = if (discoveredModel != null) {
-            listOf(discoveredModel) + FALLBACK_MODELS.filter { it != discoveredModel }
-        } else {
-            FALLBACK_MODELS
-        }
+        // Combine discovered endpoints with known reliable endpoints
+        val candidateEndpoints = (discoveredEndpoints + TEST_ENDPOINTS).distinct()
 
         val testPayload = GeminiRequest(
             contents = listOf(
                 ContentItem(
                     role = "user",
-                    parts = listOf(PartItem(text = "Hello, please reply with 'pong'."))
+                    parts = listOf(PartItem(text = "Hello, reply with OK."))
                 )
             )
         )
         val jsonBody = requestAdapter.toJson(testPayload)
         val body = jsonBody.toRequestBody(JSON_MEDIA_TYPE)
 
-        for (model in candidateList) {
-            val url = "$BASE_URL/models/$model:generateContent?key=$trimmedKey"
+        var lastErrorMsg: String? = null
+
+        for (endpoint in candidateEndpoints) {
+            val fullUrl = "$endpoint?key=$trimmedKey"
             val request = Request.Builder()
-                .url(url)
+                .url(fullUrl)
+                .header("x-goog-api-key", trimmedKey)
                 .post(body)
                 .build()
 
@@ -157,35 +119,35 @@ class GeminiClient {
                         val parsed = responseAdapter.fromJson(responseString)
                         val text = parsed?.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
                         if (!text.isNullOrBlank()) {
-                            cachedActiveModel = model
+                            cachedWorkingEndpoint = endpoint
                             return@withContext Result.success(true)
                         }
-                    } else if (response.code == 404 && model != candidateList.last()) {
-                        // Model not supported, continue to next candidate
-                        return@use
+                    } else if (response.code == 404) {
+                        // Model not supported on this endpoint, continue trying others
+                        lastErrorMsg = "Model not found on endpoint. Trying alternatives..."
                     } else {
                         val parsedError = try {
                             responseAdapter.fromJson(responseString)?.error?.message
                         } catch (_: Exception) {
                             null
                         }
-                        val errorMsg = when (response.code) {
-                            400 -> parsedError ?: "Invalid API request format."
-                            403 -> parsedError ?: "API key lacks permission."
+                        lastErrorMsg = when (response.code) {
+                            400 -> parsedError ?: "API key is invalid. Please check your key in Google AI Studio."
+                            403 -> parsedError ?: "API key lacks permission or Gemini API is not enabled in Google Cloud."
                             429 -> "API quota exceeded. Please check Google AI Studio."
-                            else -> parsedError ?: "HTTP ${response.code}: Model connection failed."
+                            else -> parsedError ?: "HTTP ${response.code}: Connection failed."
                         }
-                        return@withContext Result.failure(IOException(errorMsg))
+                        if (response.code == 400 || response.code == 403) {
+                            return@withContext Result.failure(IOException(lastErrorMsg))
+                        }
                     }
                 }
             } catch (e: Exception) {
-                if (model == candidateList.last()) {
-                    return@withContext Result.failure(e)
-                }
+                lastErrorMsg = e.message
             }
         }
 
-        Result.failure(IOException("Failed to connect to Gemini API. Please check your network and API key."))
+        Result.failure(IOException(lastErrorMsg ?: "Could not connect to Gemini API. Please verify your internet and API key."))
     }
 
     suspend fun askGemini(
@@ -194,12 +156,10 @@ class GeminiClient {
         preferredLanguage: String,
         contextHistory: List<Pair<String, String>> = emptyList()
     ): Result<String> = withContext(Dispatchers.IO) {
-        val trimmedKey = apiKey.trim()
+        val trimmedKey = cleanKey(apiKey)
         if (trimmedKey.isEmpty()) {
             return@withContext Result.failure(IllegalStateException("Gemini API key is not configured."))
         }
-
-        val activeModel = resolveSupportedModel(trimmedKey)
 
         val languageInstruction = when (preferredLanguage.lowercase()) {
             "bn", "bengali" -> "You are NOVA AI, an intelligent, helpful, and friendly voice personal assistant. The user prefers Bengali (বাংলা). Answer clearly, conversationally, and accurately in Bengali. Keep answers concise and suitable for spoken text."
@@ -211,13 +171,11 @@ class GeminiClient {
 
         val contentsList = mutableListOf<ContentItem>()
 
-        // Recent conversation context (up to last 3 exchanges)
         for (item in contextHistory.takeLast(3)) {
             contentsList.add(ContentItem(role = "user", parts = listOf(PartItem(text = item.first))))
             contentsList.add(ContentItem(role = "model", parts = listOf(PartItem(text = item.second))))
         }
 
-        // Current question
         contentsList.add(ContentItem(role = "user", parts = listOf(PartItem(text = prompt))))
 
         val geminiRequest = GeminiRequest(
@@ -230,12 +188,14 @@ class GeminiClient {
         val jsonBody = requestAdapter.toJson(geminiRequest)
         val body = jsonBody.toRequestBody(JSON_MEDIA_TYPE)
 
-        val candidateList = listOf(activeModel) + FALLBACK_MODELS.filter { it != activeModel }
+        val baseEndpoint = cachedWorkingEndpoint ?: TEST_ENDPOINTS.first()
+        val candidateEndpoints = listOf(baseEndpoint) + TEST_ENDPOINTS.filter { it != baseEndpoint }
 
-        for (model in candidateList) {
-            val url = "$BASE_URL/models/$model:generateContent?key=$trimmedKey"
+        for (endpoint in candidateEndpoints) {
+            val fullUrl = "$endpoint?key=$trimmedKey"
             val request = Request.Builder()
-                .url(url)
+                .url(fullUrl)
+                .header("x-goog-api-key", trimmedKey)
                 .post(body)
                 .build()
 
@@ -246,12 +206,12 @@ class GeminiClient {
                         val parsed = responseAdapter.fromJson(responseString)
                         val text = parsed?.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
                         if (!text.isNullOrBlank()) {
-                            cachedActiveModel = model
+                            cachedWorkingEndpoint = endpoint
                             return@withContext Result.success(text.trim())
                         } else {
                             return@withContext Result.failure(IOException("Empty response received from Gemini."))
                         }
-                    } else if (response.code == 404 && model != candidateList.last()) {
+                    } else if (response.code == 404 && endpoint != candidateEndpoints.last()) {
                         return@use
                     } else {
                         val errorDetails = try {
@@ -269,7 +229,7 @@ class GeminiClient {
                     }
                 }
             } catch (e: Exception) {
-                if (model == candidateList.last()) {
+                if (endpoint == candidateEndpoints.last()) {
                     return@withContext Result.failure(e)
                 }
             }
