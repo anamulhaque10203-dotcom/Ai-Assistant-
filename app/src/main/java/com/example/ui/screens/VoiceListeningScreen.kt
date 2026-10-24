@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -66,15 +67,60 @@ fun VoiceListeningScreen(
     val rmsLevel by viewModel.speechRecognitionManager.rmsLevel.collectAsState()
 
     val infiniteTransition = rememberInfiniteTransition(label = "ActiveMicPulse")
+    
+    // Core pulsing scale
     val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 0.95f,
+        initialValue = 0.94f,
         targetValue = 1.08f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 600, easing = LinearEasing),
+            animation = tween(durationMillis = 750, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "PulseScale"
     )
+
+    // Outer expanding ripple ring 1
+    val ripple1Scale by infiniteTransition.animateFloat(
+        initialValue = 1.0f,
+        targetValue = 1.65f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "Ripple1Scale"
+    )
+    val ripple1Alpha by infiniteTransition.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 0.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "Ripple1Alpha"
+    )
+
+    // Outer expanding ripple ring 2 (offset)
+    val ripple2Scale by infiniteTransition.animateFloat(
+        initialValue = 1.0f,
+        targetValue = 1.45f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "Ripple2Scale"
+    )
+    val ripple2Alpha by infiniteTransition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 0.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "Ripple2Alpha"
+    )
+
+    // Combined dynamic scale reacting to user's real voice RMS audio level
+    val dynamicMicScale = (pulseScale + (rmsLevel * 0.28f)).coerceIn(0.9f, 1.4f)
 
     Box(
         modifier = Modifier
@@ -155,31 +201,58 @@ fun VoiceListeningScreen(
 
                 Spacer(modifier = Modifier.height(28.dp))
 
-                // Big Active Mic Button with pulsing aura
+                // Interactive Pulsing Microphone Container
                 Box(
                     modifier = Modifier
-                        .size(100.dp)
-                        .scale(pulseScale)
-                        .clip(CircleShape)
-                        .background(NovaCyanGlow.copy(alpha = 0.2f))
-                        .border(2.dp, NovaCyanBright, CircleShape)
+                        .size(150.dp)
                         .clickable { onStop() }
                         .testTag("listening_mic_active_button"),
                     contentAlignment = Alignment.Center
                 ) {
+                    // Outermost animated ripple wave 1
                     Box(
                         modifier = Modifier
-                            .size(76.dp)
+                            .size(100.dp)
+                            .scale(ripple1Scale)
                             .clip(CircleShape)
-                            .background(NovaCyanGlow),
+                            .background(NovaCyanGlow.copy(alpha = ripple1Alpha))
+                    )
+
+                    // Secondary animated ripple wave 2
+                    Box(
+                        modifier = Modifier
+                            .size(92.dp)
+                            .scale(ripple2Scale)
+                            .clip(CircleShape)
+                            .border(1.5.dp, NovaCyanBright.copy(alpha = ripple2Alpha), CircleShape)
+                    )
+
+                    // Core pulsing glow container reacting to user speech
+                    Box(
+                        modifier = Modifier
+                            .size(96.dp)
+                            .scale(dynamicMicScale)
+                            .clip(CircleShape)
+                            .background(NovaCyanGlow.copy(alpha = 0.25f))
+                            .border(2.dp, NovaCyanBright, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "Active Microphone",
-                            tint = Color.Black,
-                            modifier = Modifier.size(38.dp)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(72.dp)
+                                .clip(CircleShape)
+                                .background(NovaCyanGlow),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Active Microphone",
+                                tint = Color.Black,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .scale(1f + (rmsLevel * 0.15f))
+                            )
+                        }
                     }
                 }
             }
