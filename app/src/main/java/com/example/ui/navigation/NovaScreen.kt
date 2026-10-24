@@ -1,0 +1,20 @@
+package com.example.ui.navigation
+
+enum class NovaScreen {
+    WELCOME,
+    ONBOARDING,
+    API_KEY_SETUP,
+    MICROPHONE_PERMISSION,
+    HOME,
+    VOICE_LISTENING,
+    THINKING,
+    AI_RESPONSE,
+    INTERRUPT,
+    TEXT_INPUT,
+    CONVERSATION_HISTORY,
+    SETTINGS,
+    LANGUAGE_SELECTION,
+    VOICE_SPEECH,
+    API_CONFIG,
+    ABOUT
+}
