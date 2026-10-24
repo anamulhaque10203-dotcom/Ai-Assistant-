@@ -88,7 +88,16 @@ fun NovaApp(
                     currentScreen = NovaScreen.AI_RESPONSE
                 }
             }
-            else -> {}
+            NovaVoiceState.IDLE -> {
+                if (currentScreen == NovaScreen.VOICE_LISTENING || currentScreen == NovaScreen.THINKING) {
+                    currentScreen = NovaScreen.HOME
+                }
+            }
+            NovaVoiceState.ERROR -> {
+                if (currentScreen == NovaScreen.VOICE_LISTENING || currentScreen == NovaScreen.THINKING) {
+                    currentScreen = NovaScreen.HOME
+                }
+            }
         }
     }
 
@@ -179,7 +188,14 @@ fun NovaApp(
                             currentScreen = NovaScreen.HOME
                         },
                         onStop = {
-                            viewModel.stopListening()
+                            val text = viewModel.speechRecognitionManager.partialText.value.trim()
+                            if (text.isNotBlank()) {
+                                viewModel.submitQuestion(text)
+                                currentScreen = NovaScreen.THINKING
+                            } else {
+                                viewModel.stopListening()
+                                currentScreen = NovaScreen.HOME
+                            }
                         }
                     )
                 }

@@ -116,11 +116,11 @@ class NovaViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopListening() {
-        speechRecognitionManager.stopListening()
-        val text = speechRecognitionManager.partialText.value
+        val text = speechRecognitionManager.partialText.value.trim()
         if (text.isNotBlank()) {
             submitQuestion(text)
         } else {
+            speechRecognitionManager.cancelListening()
             _voiceState.value = NovaVoiceState.IDLE
         }
     }

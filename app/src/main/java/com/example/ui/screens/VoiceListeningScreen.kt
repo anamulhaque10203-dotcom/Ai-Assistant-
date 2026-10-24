@@ -198,9 +198,7 @@ fun VoiceListeningScreen(
                         .height(52.dp)
                         .testTag("voice_cancel_button"),
                     shape = RoundedCornerShape(26.dp),
-                    border = ButtonDefaults.outlinedButtonBorder.copy(
-                        brush = androidx.compose.ui.graphics.SolidColor(NovaDarkBorder)
-                    )
+                    border = androidx.compose.foundation.BorderStroke(1.dp, NovaDarkBorder)
                 ) {
                     Text(
                         text = "Cancel",
