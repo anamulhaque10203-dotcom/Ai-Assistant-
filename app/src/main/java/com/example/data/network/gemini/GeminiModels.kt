@@ -38,3 +38,15 @@ data class GeminiError(
     val message: String? = null,
     val status: String? = null
 )
+
+@JsonClass(generateAdapter = true)
+data class ListModelsResponse(
+    val models: List<ModelInfo>? = null,
+    val error: GeminiError? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ModelInfo(
+    val name: String,
+    val supportedGenerationMethods: List<String>? = null
+)
